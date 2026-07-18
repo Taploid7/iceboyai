@@ -3,11 +3,16 @@ import { GoogleGenAI } from '@google/generative-ai';
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export default async function handler(req, res) {
-  // Enforce global wildcard CORS allowances cleanly
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); 
+  // Capture the incoming source request origin dynamically to handle CORS safely
+  const origin = req.headers.origin || '*';
+  
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', origin); 
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+  );
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -21,35 +26,38 @@ export default async function handler(req, res) {
   try {
     const { difficulty, topic, location } = req.body;
 
+    // Calculate exact correct target indices matching local indices array
+    let determinedIndex = 1; // melt
+    if (topic === "freeze") determinedIndex = 0;
+    if (topic === "evaporate") determinedIndex = 2;
+
     const systemInstruction = `
       You are an adaptive, supportive AI assistant for Taiwan elementary students playing "Ice Boy's Transformation".
       
       CORE MISSION:
-      Generate multiple-choice questions or scenarios based on the book "Ice Boy" by David Ezra Stein and water science (States of matter: Solid, Liquid, Gas).
+      Generate multiple-choice questions based on the book "Ice Boy" by David Ezra Stein and water science states (Solid, Liquid, Gas).
       
       VOCABULARY CONSTRAINT:
-      - For "easy" and "normal" difficulties, use 80% words directly from the original "Ice Boy" book (e.g., "edges began to blur", "rolled in water", "basked", "freezing", "steam").
-      - If difficulty is "hard", use more advanced concepts like "Density", "Absorb/Pores", or "Freezing point depression with salt".
+      - Use natural Traditional Chinese common in Taiwan (台灣繁體中文語體).
+      - For "easy" and "normal" difficulties, use words from the book ("edges began to blur", "basked", "steam").
+      - For "hard", introduce topics like "Density" or "Freezing point depression".
 
-      GAME MECHANICS:
-      - You must output EXACTLY three choices matching these state options:
-        1. "freeze into ice" / "結冰成固體"
-        2. "melt into water" / "融化成液體"
-        3. "evaporate into steam" / "蒸發成氣體"
+      GAME MECHANICS ANSWER FORCE:
+      You MUST return the exact answer index as ${determinedIndex} to match the scientific location reality of "${topic}".
       
       OUTPUT FORMAT:
-      You MUST respond ONLY with a valid JSON object matching this schema exactly, no markdown formatting, no backticks:
+      Return ONLY a valid raw JSON object. No markdown, no backticks (\`\`\`):
       {
-        "question_en": "String (Simple English matching current location context)",
-        "question_zh": "String (Traditional Chinese 台灣繁體中文語體)",
+        "question_en": "String (Contextualized question text)",
+        "question_zh": "String (台灣繁體中文翻譯)",
         "choices": [
           { "en": "freeze into ice", "zh": "結冰成固體" },
           { "en": "melt into water", "zh": "融化成液體" },
           { "en": "evaporate into steam", "zh": "蒸發成氣體" }
         ],
-        "answer": Number (0-2 index of the correct choice),
-        "explanation_en": "String",
-        "explanation_zh": "String"
+        "answer": ${determinedIndex},
+        "explanation_en": "String explaining the water science state transition",
+        "explanation_zh": "String (台灣繁體中文科學原理解析)"
       }
     `;
 
@@ -59,12 +67,15 @@ export default async function handler(req, res) {
     });
 
     const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: `Generate a ${difficulty} difficulty question about ${topic} in location ${location}.` }] }],
+      contents: [{ role: 'user', parts: [{ text: `Generate a ${difficulty || 'normal'} question for location ${location} where the target transformation is ${topic}.` }] }],
       systemInstruction: systemInstruction
     });
 
-    return res.status(200).json(JSON.parse(result.response.text().trim()));
+    const cleanOutput = JSON.parse(result.response.text().trim());
+    return res.status(200).json(cleanOutput);
+
   } catch (error) {
+    console.error("Backend error:", error);
     return res.status(500).json({ error: error.message });
   }
 }
