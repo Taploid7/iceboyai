@@ -1,82 +1,76 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-// Correct initialization for the Google Generative AI Node.js SDK
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// api/question.js - Vercel Serverless AI Router with CORS Support
+import { GoogleGenAI } from '@google/genai';
 
 export default async function handler(req, res) {
-  const origin = req.headers.origin || '*';
-  
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', origin); 
+  // 1. Establish Allowed CORS Headers to fix browser blocks
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allows cross-origin connection sharing globally
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
 
-  // Handle browser CORS preflight check immediately
+  // Handle browser CORS preflight check requests
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return res.status(405).json({ error: 'Method Not Allowed. Must submit an event POST request.' });
   }
 
   try {
-    const { difficulty, topic, location } = req.body;
+    const { difficulty, location, state } = req.body || {};
 
-    // Map targets strictly: 0 = freeze, 1 = melt, 2 = evaporate
-    let determinedIndex = 1; 
-    if (topic === "freeze") determinedIndex = 0;
-    if (topic === "evaporate") determinedIndex = 2;
+    if (!location || !state) {
+      return res.status(400).json({ error: 'Missing mandatory request criteria: location and state keys required.' });
+    }
 
-    const systemInstruction = `
-      You are an adaptive science AI assistant for Taiwan elementary students playing "Ice Boy's Transformation".
-      
-      CORE MISSION:
-      Generate multiple-choice questions based on water science states (Solid, Liquid, Gas).
-      
-      VOCABULARY CONSTRAINT:
-      - Use natural Traditional Chinese common in Taiwan (台灣繁體中文語體).
-      - For "easy" and "normal" difficulties, use simple book analogies ("edges began to blur", "steam").
-      - For "hard", introduce topics like "Density" or "Freezing point".
+    // Initialize the AI system using your secure environment variable token
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-      GAME MECHANICS ANSWER FORCE:
-      You MUST return the exact answer index as ${determinedIndex} to match the location parameter: "${topic}".
-      
-      OUTPUT FORMAT:
-      Return ONLY a valid raw JSON object. No markdown, no backticks (\`\`\`):
+    const systemPrompt = `
+      You are a fun science game generator for kids. Generate a multiple choice question based on the user's location and state change.
+      You MUST respond ONLY with a raw JSON object containing these exact fields:
       {
-        "question_en": "What will happen to Ice Boy at the ${location}?",
-        "question_zh": "當 Ice Boy 到達 ${location}，會發生什麼事呢？",
+        "question_en": "string",
+        "question_zh": "string",
         "choices": [
-          { "en": "freeze into ice", "zh": "結冰成固體" },
-          { "en": "melt into water", "zh": "融化成液體" },
-          { "en": "evaporate into steam", "zh": "蒸發成氣體" }
+          {"en": "freeze into ice", "zh": "結冰成固體"},
+          {"en": "melt into water", "zh": "融化成液體"},
+          {"en": "evaporate into steam", "zh": "蒸發成氣體"}
         ],
-        "answer": ${determinedIndex},
-        "explanation_en": "Correct! Cold temperatures turn liquid water back into solid ice crystals.",
-        "explanation_zh": "答對了！低溫會將液態水重新凝固成固體冰晶結構。"
+        "answer": number (0 for freeze, 1 for melt, 2 for evaporate based on matching the 'state' argument),
+        "explanation_en": "string",
+        "explanation_zh": "string"
       }
     `;
 
-    const model = genAI.getGenerativeModel({ 
+    const userPrompt = `Location: ${location}, Environment Phase Shift Target: ${state}, Applied Scaling Difficulty: ${difficulty || 'normal'}`;
+
+    const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      generationConfig: { responseMimeType: "application/json" }
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        // Enforces output as structural JSON
+        responseMimeType: 'application/json'
+      }
     });
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: `Generate a ${difficulty || 'normal'} question for location ${location} targeting ${topic}.` }] }],
-      systemInstruction: systemInstruction
-    });
+    const aiText = response.text;
+    const cleanJson = JSON.parse(aiText.trim());
 
-    const cleanOutput = JSON.parse(result.response.text().trim());
-    return res.status(200).json(cleanOutput);
+    // Send valid structural JSON directly to client application
+    return res.status(200).json(cleanJson);
 
   } catch (error) {
-    console.error("Backend runtime error:", error);
-    return res.status(500).json({ error: error.message });
+    console.error("AI Generation pipeline error:", error);
+    return res.status(500).json({ 
+      error: 'Failed to generate question', 
+      details: error.message 
+    });
   }
 }
